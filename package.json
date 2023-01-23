@@ -37,7 +37,6 @@
     "start": "node ./sandbox/server.js",
     "preversion": "gulp version",
     "version": "npm run build && git add dist && git add package.json",
-    "prepublishOnly": "npm run test:build:version",
     "postpublish": "git push && git push --tags",
     "build": "gulp clear && cross-env NODE_ENV=production rollup -c -m",
     "examples": "node ./examples/server.js",
