@@ -5,7 +5,7 @@ on:
       - closed
     branches:
       - main
-      - 'v**'
+      - "v**"
   workflow_dispatch:
 jobs:
   publish:
@@ -31,8 +31,6 @@ jobs:
       - name: Extract release notes
         id: extract-release-notes
         uses: ffurrer2/extract-release-notes@v1
-      - name: Check versions
-        run: node ./bin/check-build-version.js
       ############# TAG RELEASE ##############
       - name: "Push tag v${{ steps.package-version.outputs.current-version }}"
         uses: rickstaa/action-create-tag@v1
