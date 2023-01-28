@@ -1,4 +1,4 @@
-// Axios v1.2.3-rye.2 Copyright (c) 2023 Matt Zabriskie and contributors
+// Axios v1.2.3-rye.3 Copyright (c) 2023 Matt Zabriskie and contributors
 'use strict';
 
 const FormData$1 = require('form-data');
@@ -2740,8 +2740,9 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
     // Handle errors
     req.on('error', function handleRequestError(err) {
       // Debug logs
-      console.log('req.on error', err.code, req.res && req.res.complete);
-      console.log('req.headers', req.headers);
+      console.log('req.on error');
+      console.log('err', err, JSON.stringify(err));
+      console.log('req', req, JSON.stringify(req));
       
       // The proxy may already have closed the connection with the upstream server if keep-alive is disabled.
       // This can lead to a connection reset when the client sends a TLS close_notify message to the proxy.
