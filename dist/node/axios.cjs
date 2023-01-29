@@ -1,4 +1,4 @@
-// Axios v1.2.3 Copyright (c) 2023 Matt Zabriskie and contributors
+// Axios v1.2.3-rye-0 Copyright (c) 2023 Matt Zabriskie and contributors
 'use strict';
 
 const FormData$1 = require('form-data');
@@ -10,8 +10,27 @@ const followRedirects = require('follow-redirects');
 const zlib = require('zlib');
 const stream = require('stream');
 const EventEmitter = require('events');
+const tls = require('tls');
 
 function _interopDefaultLegacy (e) { return e && typeof e === 'object' && 'default' in e ? e : { 'default': e }; }
+
+function _interopNamespace(e) {
+  if (e && e.__esModule) return e;
+  const n = Object.create(null);
+  if (e) {
+    for (const k in e) {
+      if (k !== 'default') {
+        const d = Object.getOwnPropertyDescriptor(e, k);
+        Object.defineProperty(n, k, d.get ? d : {
+          enumerable: true,
+          get: function () { return e[k]; }
+        });
+      }
+    }
+  }
+  n["default"] = e;
+  return Object.freeze(n);
+}
 
 const FormData__default = /*#__PURE__*/_interopDefaultLegacy(FormData$1);
 const url__default = /*#__PURE__*/_interopDefaultLegacy(url);
@@ -21,6 +40,7 @@ const followRedirects__default = /*#__PURE__*/_interopDefaultLegacy(followRedire
 const zlib__default = /*#__PURE__*/_interopDefaultLegacy(zlib);
 const stream__default = /*#__PURE__*/_interopDefaultLegacy(stream);
 const EventEmitter__default = /*#__PURE__*/_interopDefaultLegacy(EventEmitter);
+const tls__namespace = /*#__PURE__*/_interopNamespace(tls);
 
 function bind(fn, thisArg) {
   return function wrap() {
@@ -2271,6 +2291,56 @@ function dispatchBeforeRedirect(options) {
 }
 
 /**
+ * Provides an HTTP tunnel socket via an HTTP CONNECT request.
+ * The tunnel socket is used for sending HTTPS requests via an HTTP proxy.
+ * @param {http.ClientRequestArgs} options
+ * @param {AxiosProxyConfig} proxyConfig
+ * @param {number} connectTimeout
+ * @returns {Promise<http.Socket>}
+ */
+const getHttpTunnelSocket = (options, proxyConfig, { connectTimeout }) => {
+  let success, fail;
+  const promise = new Promise((resolve, reject) => [success, fail] = [resolve, reject]);
+
+  let destHost = `${options.hostname || options.host}:${options.port || 443}`;
+  const headers = {
+    "Host": destHost
+  };
+  if (proxyConfig.auth) {
+    headers['Proxy-Authorization'] = getProxyAuthHeaderValue(proxyConfig.auth);
+  }
+
+  const proxyReq = http__default["default"].request({
+    method: 'CONNECT',
+    path: destHost,
+    host: proxyConfig.hostname || proxyConfig.host,
+    port: proxyConfig.port,
+    agent: false,
+    headers
+  });
+  proxyReq.setTimeout(connectTimeout, () => fail(new Error(`proxy CONNECT: timeout after ${connectTimeout}ms`)));
+  proxyReq.end();
+  proxyReq.on('error', err => fail(err));
+  proxyReq.on('connect', (response, socket) => {
+    const statusOK = response.statusCode === 200;
+    if (!statusOK) return void fail(new Error(`proxy CONNECT: status code ${response.statusCode}`));
+
+    const httpsAgent = options.agents && options.agents.https || https__default["default"].globalAgent;
+    const tlsSocket = tls__namespace.connect({
+      servername: options.headers.Host || options.hostname || options.host,
+      socket: socket,
+      rejectUnauthorized: httpsAgent.options.rejectUnauthorized,
+    });
+    tlsSocket.on('secureConnect', () => {
+      success(tlsSocket);
+    });
+    tlsSocket.on("error", err => fail(new Error(`secureConnect: ${err.message}`)));
+  });
+
+  return promise;
+};
+
+/**
  * If the proxy or config afterRedirects functions are defined, call them with the options
  *
  * @param {http.ClientRequestArgs} options
@@ -2280,13 +2350,7 @@ function dispatchBeforeRedirect(options) {
  * @returns {http.ClientRequestArgs}
  */
 function setProxy(options, configProxy, location) {
-  let proxy = configProxy;
-  if (!proxy && proxy !== false) {
-    const proxyUrl = proxyFromEnv.getProxyForUrl(location);
-    if (proxyUrl) {
-      proxy = new URL(proxyUrl);
-    }
-  }
+  const proxy = resolveProxy(configProxy, location);
   if (proxy) {
     // Basic proxy authorization
     if (proxy.username) {
@@ -2298,12 +2362,14 @@ function setProxy(options, configProxy, location) {
       if (proxy.auth.username || proxy.auth.password) {
         proxy.auth = (proxy.auth.username || '') + ':' + (proxy.auth.password || '');
       }
-      const base64 = Buffer
-        .from(proxy.auth, 'utf8')
-        .toString('base64');
-      options.headers['Proxy-Authorization'] = 'Basic ' + base64;
     }
 
+    options._httpsOverHttp = proxy.protocol === "http:" && options.protocol === "https:";
+    if (options._httpsOverHttp) return proxy;
+
+    if (proxy.auth) {
+      options.headers['Proxy-Authorization'] = getProxyAuthHeaderValue(proxy.auth);
+    }
     options.headers.host = options.hostname + (options.port ? ':' + options.port : '');
     const proxyHost = proxy.hostname || proxy.host;
     options.hostname = proxyHost;
@@ -2321,6 +2387,24 @@ function setProxy(options, configProxy, location) {
     // the exact same logic as if the redirected request was performed by axios directly.
     setProxy(redirectOptions, configProxy, redirectOptions.href);
   };
+
+  return proxy;
+}
+
+function getProxyAuthHeaderValue(auth) {
+  return 'Basic ' + Buffer
+    .from(auth, 'utf8')
+    .toString('base64');
+}
+
+function resolveProxy(configProxy, location) {
+  if (!configProxy && configProxy !== false) {
+    const proxyUrl = proxyFromEnv.getProxyForUrl(location);
+    if (proxyUrl) {
+      configProxy = new URL(proxyUrl);
+    }
+  }
+  return configProxy;
 }
 
 const isHttpAdapterSupported = typeof process !== 'undefined' && utils.kindOf(process) === 'process';
@@ -2557,12 +2641,47 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
       beforeRedirects: {}
     };
 
+    let proxy;
     if (config.socketPath) {
       options.socketPath = config.socketPath;
     } else {
       options.hostname = parsed.hostname;
       options.port = parsed.port;
-      setProxy(options, config.proxy, protocol + '//' + parsed.hostname + (parsed.port ? ':' + parsed.port : '') + options.path);
+      proxy = setProxy(options, config.proxy, protocol + '//' + parsed.hostname + (parsed.port ? ':' + parsed.port : '') + options.path);
+    }
+
+    let timeout;
+    if (config.timeout) {
+      // This is forcing a int timeout to avoid problems if the `req` interface doesn't handle other types.
+      timeout = parseInt(config.timeout, 10);
+
+      if (isNaN(timeout)) {
+        reject(new AxiosError(
+          'error trying to parse `config.timeout` to int',
+          AxiosError.ERR_BAD_OPTION_VALUE,
+          config
+        ));
+
+        return;
+      }
+    }
+
+    // Issue a CONNECT request first if proxying an HTTPS request over HTTP
+    if (options._httpsOverHttp) {
+      // Redirects are currently not supported with HTTPS over HTTP
+      // Need to find a solution for connection resets after redirect responses
+      config.maxRedirects = 0;
+
+      const createConnection = (opts, cb) => {
+        getHttpTunnelSocket(options, proxy, { connectTimeout: timeout || 10000 })
+          .then(socket => cb(null, socket))
+          .catch(cb);
+      };
+      if (options.agents.https) {
+        options.agents.https.createConnection = createConnection;
+      } else {
+        options.createConnection = createConnection;
+      }
     }
 
     let transport;
@@ -2739,6 +2858,17 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
 
     // Handle errors
     req.on('error', function handleRequestError(err) {
+      // Debug logs
+      console.log('req.on error');
+      console.log('err', err);
+      console.log('req', req);
+      console.log('options', options);
+    
+      // The proxy may already have closed the connection with the upstream server if keep-alive is disabled.
+      // This can lead to a connection reset when the client sends a TLS close_notify message to the proxy.
+      // Note: This hack would not work with follow-redirects, which only emits the final response.
+      if (options._httpsOverHttp && err.code === "ECONNRESET" && req.res && req.res.complete) return;
+
       // @todo remove
       // if (req.aborted && err.code !== AxiosError.ERR_FR_TOO_MANY_REDIRECTS) return;
       reject(AxiosError.from(err, null, config, req));
@@ -2751,21 +2881,7 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
     });
 
     // Handle request timeout
-    if (config.timeout) {
-      // This is forcing a int timeout to avoid problems if the `req` interface doesn't handle other types.
-      const timeout = parseInt(config.timeout, 10);
-
-      if (isNaN(timeout)) {
-        reject(new AxiosError(
-          'error trying to parse `config.timeout` to int',
-          AxiosError.ERR_BAD_OPTION_VALUE,
-          config,
-          req
-        ));
-
-        return;
-      }
-
+    if (timeout) {
       // Sometime, the response will be very slow, and does not respond, the connect event will be block by event loop system.
       // And timer callback will be fired, and abort() will be invoked before connection, then get "socket hang up" and code ECONNRESET.
       // At this time, if we have a large number of request, nodejs will hang up some socket on background. and the number will up and up.
