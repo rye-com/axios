@@ -1,4 +1,4 @@
-// Axios v1.2.3-rye.2 Copyright (c) 2023 Matt Zabriskie and contributors
+// Axios v1.2.3 Copyright (c) 2023 Matt Zabriskie and contributors
 'use strict';
 
 const FormData$1 = require('form-data');
@@ -2739,15 +2739,6 @@ const httpAdapter = isHttpAdapterSupported && function httpAdapter(config) {
 
     // Handle errors
     req.on('error', function handleRequestError(err) {
-      // Debug logs
-      console.log('req.on error', err.code, req.res && req.res.complete);
-      console.log('req.headers', req.headers);
-      
-      // The proxy may already have closed the connection with the upstream server if keep-alive is disabled.
-      // This can lead to a connection reset when the client sends a TLS close_notify message to the proxy.
-      // Note: This hack would not work with follow-redirects, which only emits the final response.
-      if (err.code === "ECONNRESET" && req.res && req.res.complete) return;
-      
       // @todo remove
       // if (req.aborted && err.code !== AxiosError.ERR_FR_TOO_MANY_REDIRECTS) return;
       reject(AxiosError.from(err, null, config, req));

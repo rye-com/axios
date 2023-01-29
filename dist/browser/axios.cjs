@@ -1,4 +1,4 @@
-// Axios v1.2.3-rye.2 Copyright (c) 2023 Matt Zabriskie and contributors
+// Axios v1.2.3 Copyright (c) 2023 Matt Zabriskie and contributors
 'use strict';
 
 function bind(fn, thisArg) {
